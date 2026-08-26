@@ -305,28 +305,24 @@ footer{text-align:center;padding:20px;font-family:var(--font-mono);font-size:10.
 <canvas id="starfield"></canvas>
 <canvas id="burst"></canvas>
 <div id="app"></div>
-<script id="seed-data" type="application/json">{"submissions": []}</script>
 <script id="app-script">
-const SCRIPT_TEXT = document.currentScript.textContent;
-const STYLE_TEXT = document.getElementById('app-style').textContent;
-const C_SCRIPT_OPEN = '<' + 'script';
-const C_SCRIPT_CLOSE = '<' + '/script>';
-const C_STYLE_CLOSE = '<' + '/style>';
+/* GitHub Issues is the shared backend. Reads hit the public GitHub API
+   directly (no auth needed for a public repo); writes go through a small
+   proxy (see /worker) that holds the write token server-side. */
+const GITHUB_REPO = 'Galantoren/AI-Form';
+const SIGNAL_LABEL = 'signal';
+const SUBMIT_ENDPOINT = 'https://REPLACE-ME.workers.dev/submit';
+const SUBMISSIONS_CACHE_KEY = 'signalRelaySubmissionsCache';
+const SUBMISSIONS_CACHE_TTL = 45000;
 
 const PRIORITIES = ['Low','Medium','High','Mission-Critical'];
 const SITES = ['UK','US','TLV'];
 const TEAMS = ['Enterprise','SMB'];
 const PRI_CALLSIGN = {'Low':'SCOUT','Medium':'VOYAGER','High':'PATHFINDER','Mission-Critical':'VANGUARD'};
 
-let state = { submissions: [] };
-try{
-  const seedEl = document.getElementById('seed-data');
-  const seed = JSON.parse(seedEl.textContent || '{}');
-  if(Array.isArray(seed.submissions)) state.submissions = seed.submissions;
-}catch(e){ console.error('seed parse failed', e); }
+let state = { submissions: [], loaded: false, loading: false };
 
 let route = location.hash === '#control' ? 'dashboard' : 'form';
-let readOnly = localStorage.getItem('signalRelayReadOnly') === '1';
 let toastTimer = null;
 
 let form = {
@@ -344,7 +340,6 @@ function escapeHtml(str){
 }
 function clamp(n,a,b){ return Math.max(a,Math.min(b,n)); }
 function genId(){ return 'sig-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,9); }
-function crewIdFor(seq){ return 'CSA-' + String(seq).padStart(3,'0'); }
 function relTime(ts){
   const diff = Date.now() - ts;
   const m = Math.round(diff/60000);
@@ -480,13 +475,7 @@ function playBurst(){
   });
 }
 
-/* ---------------- persistence ---------------- */
-async function getArtifactCap(){
-  try{
-    if(!window.claude || !window.claude.use) return null;
-    return await window.claude.use('artifact');
-  }catch(e){ return null; }
-}
+/* ---------------- persistence (GitHub Issues) ---------------- */
 function localBackupKey(){ return 'signalRelayLocalBackup'; }
 function pushLocalBackup(sub){
   try{
@@ -502,6 +491,12 @@ function readLocalBackup(){
     return raw ? JSON.parse(raw) : [];
   }catch(e){ return []; }
 }
+function dropLocalBackup(id){
+  try{
+    const arr = readLocalBackup().filter(s=>s.id!==id);
+    localStorage.setItem(localBackupKey(), JSON.stringify(arr));
+  }catch(e){}
+}
 function showToast(msg){
   clearTimeout(toastTimer);
   let t = document.querySelector('.toast');
@@ -509,75 +504,85 @@ function showToast(msg){
   t.textContent = msg;
   toastTimer = setTimeout(()=>{ t.remove(); }, 4200);
 }
-const PERMANENT_CODES = ['not_writer','not_declared','not_granted','capability_disabled','capability_removed','consent_required'];
 
-function buildDocument(newState){
-  const jsonSafe = JSON.stringify(newState).replace(/</g,'\\u003c');
-  return '<!doctype html>\n' +
-  '<html lang="en" data-theme="dark">\n' +
-  '<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
-  '<title>Signal Relay</title>\n' +
-  '<style id="app-style">' + STYLE_TEXT + C_STYLE_CLOSE + '\n' +
-  '</head>\n<body>\n' +
-  '<canvas id="starfield"></canvas>\n<canvas id="burst"></canvas>\n<div id="app"></div>\n' +
-  C_SCRIPT_OPEN + ' id="seed-data" type="application/json">' + jsonSafe + C_SCRIPT_CLOSE + '\n' +
-  C_SCRIPT_OPEN + ' id="app-script">' + SCRIPT_TEXT + C_SCRIPT_CLOSE + '\n' +
-  '</body>\n</html>';
-}
-
-async function attemptPublish(submission, attempt){
-  attempt = attempt || 0;
-  if(readOnly){ pushLocalBackup(submission); return; }
-  const cap = await getArtifactCap();
-  if(!cap){
-    localStorage.setItem('signalRelayReadOnly','1');
-    readOnly = true;
-    pushLocalBackup(submission);
-    return;
-  }
-  sessionStorage.setItem('pendingSignal', JSON.stringify({submission, attempt}));
+/* Submissions live as GitHub Issues labeled "signal" — each issue body ends
+   in a fenced ```json block holding the structured fields. Reads hit the
+   public GitHub REST API directly; writes go through SUBMIT_ENDPOINT so the
+   write token never touches this public page. */
+function parseSubmissionFromIssue(issue){
+  const body = issue.body || '';
+  const match = body.match(/```json\n([\s\S]*?)\n```/);
+  if(!match) return null;
   try{
-    const html = buildDocument(state);
-    await cap.publish(html);
-    sessionStorage.removeItem('pendingSignal');
-  }catch(err){
-    const code = err && err.code;
-    if(code === 'conflict'){
-      return; // shell reloads this view; boot() resumes from sessionStorage
-    }
-    if(PERMANENT_CODES.indexOf(code) !== -1){
-      localStorage.setItem('signalRelayReadOnly','1');
-      readOnly = true;
-      sessionStorage.removeItem('pendingSignal');
-      pushLocalBackup(submission);
-      showToast('Saved on this device only — ask the host to grant edit access to sync it to the shared board.');
-      return;
-    }
-    if((code === 'upstream_error' || code === 'rate_limited') && attempt < 3){
-      setTimeout(()=>attemptPublish(submission, attempt+1), 700 + Math.random()*600);
-      return;
-    }
-    sessionStorage.removeItem('pendingSignal');
-    pushLocalBackup(submission);
-    showToast('Could not reach the shared board — your signal is saved on this device.');
+    const data = JSON.parse(match[1]);
+    if(!data.id) data.id = 'issue-' + issue.number;
+    data.issueNumber = issue.number;
+    return data;
+  }catch(e){ return null; }
+}
+
+async function fetchAllSignalIssues(){
+  const out = [];
+  let page = 1;
+  while(true){
+    const url = 'https://api.github.com/repos/'+GITHUB_REPO+'/issues?labels='+encodeURIComponent(SIGNAL_LABEL)+'&state=all&per_page=100&page='+page;
+    const resp = await fetch(url, { headers: { 'Accept': 'application/vnd.github+json' } });
+    if(!resp.ok) throw new Error('github_fetch_failed:'+resp.status);
+    const batch = await resp.json();
+    out.push.apply(out, batch);
+    if(batch.length < 100) break;
+    page++;
+    if(page > 20) break; // sanity cap
+  }
+  return out;
+}
+
+async function loadSubmissions(force){
+  if(!force){
+    try{
+      const raw = sessionStorage.getItem(SUBMISSIONS_CACHE_KEY);
+      if(raw){
+        const cached = JSON.parse(raw);
+        if(Date.now() - cached.ts < SUBMISSIONS_CACHE_TTL){
+          state.submissions = cached.submissions;
+          state.loaded = true;
+          return;
+        }
+      }
+    }catch(e){}
+  }
+  state.loading = true;
+  render();
+  try{
+    const issues = await fetchAllSignalIssues();
+    const subs = issues.map(parseSubmissionFromIssue).filter(Boolean);
+    subs.forEach(s=>dropLocalBackup(s.id));
+    state.submissions = subs;
+    state.loaded = true;
+    try{ sessionStorage.setItem(SUBMISSIONS_CACHE_KEY, JSON.stringify({ts:Date.now(), submissions:subs})); }catch(e){}
+  }catch(e){
+    showToast('Could not reach the shared board — showing signals saved on this device only.');
+  }finally{
+    state.loading = false;
+    render();
   }
 }
 
-function resumePendingOnBoot(){
-  let pending = null;
-  try{ pending = JSON.parse(sessionStorage.getItem('pendingSignal') || 'null'); }catch(e){}
-  if(!pending || !pending.submission) return;
-  const exists = state.submissions.some(s=>s.id === pending.submission.id);
-  if(!exists){
-    if((pending.attempt||0) >= 5){
-      sessionStorage.removeItem('pendingSignal');
-      pushLocalBackup(pending.submission);
-      return;
-    }
-    state.submissions = state.submissions.concat([pending.submission]);
-    attemptPublish(pending.submission, (pending.attempt||0)+1);
-  }else{
-    sessionStorage.removeItem('pendingSignal');
+async function submitSignal(submission){
+  try{
+    const resp = await fetch(SUBMIT_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submission)
+    });
+    if(!resp.ok) throw new Error('submit_failed:'+resp.status);
+    const result = await resp.json();
+    try{ sessionStorage.removeItem(SUBMISSIONS_CACHE_KEY); }catch(e){}
+    return { ok:true, crewId: result.crewId, crewSeq: result.crewSeq };
+  }catch(e){
+    pushLocalBackup(submission);
+    showToast('Could not reach the shared board — your signal is saved on this device. Try resubmitting later.');
+    return { ok:false };
   }
 }
 
@@ -616,7 +621,7 @@ function renderLanding(){
     '<p class="lede">Your ideas, blockers, and asks shape the agenda &mdash; not ours. One screen, one signal, sent straight to Mission Control.</p>' +
     '<button class="btn btn-primary" data-action="start">Send Your Signal →</button>' +
     '<div class="stat-row">' +
-      '<div class="stat-chip"><b class="mono">' + state.submissions.length + '</b><span>Signals received</span></div>' +
+      '<div class="stat-chip"><b class="mono">' + (state.loaded ? state.submissions.length : '—') + '</b><span>Signals received</span></div>' +
       '<div class="stat-chip"><b class="mono">1</b><span>Screen</span></div>' +
       '<div class="stat-chip"><b class="mono">~1min</b><span>Time to launch</span></div>' +
     '</div>' +
@@ -701,8 +706,11 @@ function renderConfirmation(){
       '<div><b class="mono">'+escapeHtml(s.site)+'</b><span>Site</span></div>' +
       '<div><b class="mono">'+s.priority+'</b><span>Priority</span></div>' +
     '</div>' +
-    '<p class="tally">You are signal <b class="mono" style="color:var(--lime)">#'+s.crewSeq+'</b> received from the crew ahead of the workshop.</p>' +
-    '<p class="notice">Mission Control will read this. Eventually. Probably before the workshop.</p>' +
+    (s._synced===false
+      ? '<p class="notice">Could not reach Mission Control — this signal is saved on this device only. Try &ldquo;Send Another Signal&rdquo; again once you&rsquo;re back online.</p>'
+      : ('<p class="tally">You are signal <b class="mono" style="color:var(--lime)">#'+s.crewSeq+'</b> received from the crew ahead of the workshop.</p>' +
+         '<p class="notice">Mission Control will read this. Eventually. Probably before the workshop.</p>')
+    ) +
     '<div class="confirm-actions">' +
       '<button class="btn btn-primary" data-action="reset">Send Another Signal</button>' +
       '<a class="btn btn-ghost" data-action="go-dash" href="#control">View Mission Control</a>' +
@@ -725,6 +733,10 @@ function priorityIcon(priority){
 }
 
 function renderDashboard(){
+  if(state.loading && !state.loaded){
+    return '<div class="dash"><div class="dash-head"><div><p class="eyebrow">Live Signal Board</p><h2>AI Workshop — Mission Control</h2></div></div>' +
+      '<div class="empty-state"><p class="eyebrow">Loading signals&hellip;</p></div></div>';
+  }
   const subs = allSubmissionsForDisplay();
   const byPri = {Low:0,Medium:0,High:0,'Mission-Critical':0};
   const bySite = {UK:0,US:0,TLV:0};
@@ -771,7 +783,7 @@ function renderDashboard(){
 
   return '<div class="dash">' +
     '<div class="dash-head"><div><p class="eyebrow">Live Signal Board</p><h2>AI Workshop — Mission Control</h2></div>' +
-    '<div class="dash-actions"><button class="btn btn-ghost btn-sm" data-action="export">Export CSV</button></div></div>' +
+    '<div class="dash-actions"><button class="btn btn-ghost btn-sm" data-action="refresh">'+(state.loading?'Refreshing…':'Refresh')+'</button><button class="btn btn-ghost btn-sm" data-action="export">Export CSV</button></div></div>' +
     '<div class="tiles">'+tiles+'</div>' +
     '<div class="dash-grid-2">' +
       '<div class="panel-flat"><h3>Priority Distribution</h3><div class="pri-dist">'+priCols+'</div></div>' +
@@ -797,7 +809,7 @@ function rowHtml(s){
     '<td>'+priorityIcon(s.priority)+'</td></tr>';
 }
 
-async function exportCsv(){
+function exportCsv(){
   const subs = allSubmissionsForDisplay();
   const headers = ['Crew ID','Name','Site','Team','Headline','Details','Priority','Wants Demo','Skill Offered','Received'];
   const lines = [headers.join(',')];
@@ -806,20 +818,16 @@ async function exportCsv(){
     lines.push(row.map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(','));
   });
   const csv = lines.join('\n');
-  try{
-    if(!window.claude || !window.claude.use){ showToast('Download unavailable in this preview.'); return; }
-    const downloads = await window.claude.use('downloads');
-    if(!downloads){ showToast('Download unavailable in this view.'); return; }
-    try{
-      await downloads.save({filename:'ai-workshop-signals.csv', data: csv});
-    }catch(err){
-      if(err && err.code==='extension_not_enabled'){
-        await downloads.save({filename:'ai-workshop-signals.txt', data: csv});
-      }else if(err && err.code !== 'declined'){
-        showToast('Export failed — try again.');
-      }
-    }
-  }catch(e){ showToast('Export unavailable in this preview.'); }
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ai-workshop-signals.csv';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
 
 /* ---------------- validation + step flow ---------------- */
@@ -838,20 +846,24 @@ function validateForm(){
 
 async function launchSignal(){
   if(!validateForm()) return;
-  const seq = state.submissions.length + 1;
   const submission = {
-    id: genId(), crewId: crewIdFor(seq), crewSeq: seq, ts: Date.now(),
+    id: genId(), ts: Date.now(),
     name: form.name.trim(), site: form.site, team: form.team,
     headline: form.headline.trim(), details: form.details.trim(),
     priority: form.priority, wantsDemo: form.wantsDemo,
     wantsSkillShare: form.wantsSkillShare, skill: form.wantsSkillShare ? form.skill.trim() : ''
   };
+  const launchBtn = document.querySelector('[data-action="launch"]');
+  if(launchBtn){ launchBtn.disabled = true; launchBtn.textContent = 'Transmitting…'; }
+  const result = await submitSignal(submission);
+  submission._synced = result.ok;
+  submission.crewId = result.ok ? result.crewId : 'LOCAL-' + submission.id.slice(-4).toUpperCase();
+  submission.crewSeq = result.ok ? result.crewSeq : null;
   lastConfirmation = submission;
   render();
   await playBurst();
   render();
-  state.submissions = state.submissions.concat([submission]);
-  attemptPublish(submission, 0);
+  if(result.ok) state.submissions = state.submissions.concat([submission]);
 }
 
 /* ---------------- events ---------------- */
@@ -867,9 +879,10 @@ document.addEventListener('click', function(e){
   else if(action==='toggle-skill'){ form.wantsSkillShare = !form.wantsSkillShare; render(); }
   else if(action==='launch'){ e.preventDefault(); launchSignal(); }
   else if(action==='reset'){ lastConfirmation=null; panelEntered=false; form={step:0,name:'',site:null,team:null,headline:'',details:'',priority:'Medium',wantsDemo:false,wantsSkillShare:false,skill:''}; location.hash=''; route='form'; render(); }
-  else if(action==='go-dash'){ e.preventDefault(); route='dashboard'; location.hash='control'; render(); }
+  else if(action==='go-dash'){ e.preventDefault(); route='dashboard'; location.hash='control'; render(); loadSubmissions(false); }
   else if(action==='go-form'){ e.preventDefault(); lastConfirmation=null; route='form'; location.hash=''; render(); }
   else if(action==='export'){ exportCsv(); }
+  else if(action==='refresh'){ loadSubmissions(true); }
 });
 
 document.addEventListener('input', function(e){
@@ -883,11 +896,12 @@ document.addEventListener('input', function(e){
 window.addEventListener('hashchange', function(){
   route = location.hash === '#control' ? 'dashboard' : 'form';
   render();
+  if(route==='dashboard') loadSubmissions(false);
 });
 
 function boot(){
-  resumePendingOnBoot();
   render();
+  loadSubmissions(false);
 }
 boot();
 </script>
