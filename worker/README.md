@@ -1,6 +1,6 @@
 # Signal Relay — write proxy
 
-`signal-relay.html` is a static page. Its Mission Control dashboard reads
+`index.html` is a static page. Its Mission Control dashboard reads
 submissions straight from the public GitHub Issues API (no auth needed —
 the repo is public). But *creating* an issue needs a token, and a token
 can't safely live inside a public HTML file — anyone who views the page
@@ -35,7 +35,7 @@ npx wrangler deploy
 
 ## 3. Wire it into the form
 
-In `signal-relay.html`, set:
+In `index.html`, set:
 
 ```js
 const SUBMIT_ENDPOINT = 'https://signal-relay-submit.<your-subdomain>.workers.dev/submit';

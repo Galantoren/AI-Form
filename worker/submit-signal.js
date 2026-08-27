@@ -1,7 +1,7 @@
 /**
  * Signal Relay write proxy.
  *
- * signal-relay.html is a public, static page (served e.g. via GitHub Pages).
+ * index.html is a public, static page (served e.g. via GitHub Pages).
  * Reads of Mission Control hit the public GitHub REST API directly — no
  * secret needed for that, since the repo is public.
  *
