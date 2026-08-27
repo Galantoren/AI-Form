@@ -777,9 +777,8 @@ function renderDashboard(){
 
   const sorted = subs.slice().sort((a,b)=>b.ts-a.ts);
   const tableBody = sorted.length ? sorted.map(rowHtml).join('') : '';
-  const skillRows = subs.filter(s=>s.wantsSkillShare && s.skill).map(s=>
-    '<div class="skill-row"><span class="skill-tag">'+escapeHtml(s.site||'—')+' &middot; '+escapeHtml(s.team||'—')+'</span><span>'+escapeHtml(s.skill)+'</span></div>'
-  ).join('');
+  // Skill text people wrote in is intentionally not rendered on the shared
+  // dashboard — it's only available via CSV export, kept out of view here.
 
   return '<div class="dash">' +
     '<div class="dash-head"><div><p class="eyebrow">Live Signal Board</p><h2>AI Workshop — Mission Control</h2></div>' +
@@ -790,7 +789,6 @@ function renderDashboard(){
       '<div class="panel-flat"><h3>Signals by Site</h3><div class="pri-dist">'+siteCols+'</div></div>' +
     '</div>' +
     '<div class="panel-flat"><h3>Signals by Team</h3><div class="pri-dist">'+teamCols+'</div></div>' +
-    (skillRows ? '<div class="panel-flat"><h3>Skills Offered</h3><div class="skill-list">'+skillRows+'</div></div>' : '') +
     '<div class="panel-flat">' +
       '<h3>Transmission Log</h3>' +
       '<p class="field-hint" style="margin-bottom:14px">Crew identity is kept off this board &mdash; each row shows site, team, and headline only.</p>' +
