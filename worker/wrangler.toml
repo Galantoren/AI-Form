@@ -4,11 +4,10 @@ compatibility_date = "2024-11-01"
 
 [vars]
 GITHUB_REPO = "Galantoren/AI-Form"
-# Set this to the exact origin the form is served from once you know it,
-# e.g. "https://galantoren.github.io" for GitHub Pages at the default
-# <user>.github.io/<repo>/ URL. "*" works too; see worker/README.md for why
-# this only affects browser CORS, not who can call the endpoint directly.
-ALLOWED_ORIGIN = "*"
+# The form is live at https://galantoren.github.io/AI-Form/ — scoped CORS
+# to that origin. See worker/README.md for why this only affects browser
+# CORS, not who can call the endpoint directly.
+ALLOWED_ORIGIN = "https://galantoren.github.io"
 
 # GITHUB_TOKEN is a secret, not a var — never put it here.
 # Set it with: wrangler secret put GITHUB_TOKEN
