@@ -1,11 +1,11 @@
-# Signal Relay — write proxy
+# AI Pulse — write proxy
 
-`index.html` is a static page. Its Mission Control dashboard reads
-submissions straight from the public GitHub Issues API (no auth needed —
-the repo is public). But *creating* an issue needs a token, and a token
-can't safely live inside a public HTML file — anyone who views the page
-source would get it. This Worker is the only thing that holds that token;
-the page POSTs to it instead of to GitHub directly.
+`index.html` is a static page. Saving a survey response means creating a
+GitHub Issue, which needs a token, and a token can't safely live inside a
+public HTML file — anyone who views the page source would get it. This
+Worker is the only thing that holds that token; the page POSTs each
+response to it instead of to GitHub directly, and it creates an issue
+labeled `survey`.
 
 ## 1. Create a scoped token
 
@@ -38,7 +38,7 @@ npx wrangler deploy
 In `index.html`, set:
 
 ```js
-const SUBMIT_ENDPOINT = 'https://signal-relay-submit.<your-subdomain>.workers.dev/submit';
+const CONFIG = { endpoint: 'https://signal-relay-submit.<your-subdomain>.workers.dev/submit', total: 8 };
 ```
 
 (Note the `/submit` — the Worker itself doesn't route paths, but keeping a

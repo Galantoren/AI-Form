@@ -1,42 +1,28 @@
-# Signal Relay
+# AI Pulse · CSM Survey
 
-A single-file feedback form for the Optimove CS AI Workshop
-(`index.html`). People submit a "signal" (idea, blocker, ask); every
-submission is documented as a **GitHub Issue** labeled `signal` in this
-repo, and the page's built-in **Mission Control** dashboard reads those
-issues back to show the team a live, shared board (totals, priority/site/
-team breakdowns, a transmission log, CSV export).
+A single-file survey for Optimove CSMs (`index.html`). Each response is
+saved as a **GitHub Issue** labeled `survey` in this repo — a readable
+summary plus the full answers as JSON at the bottom of the issue.
 
 ## How it's wired together
 
-- **The page** (`index.html`) is static HTML/CSS/JS — host it
-  anywhere that serves static files, e.g. GitHub Pages.
-- **Reads** (Mission Control's dashboard) call the public GitHub REST API
-  directly from the browser — no auth needed, since this repo is public.
-- **Writes** (a new submission) go through a small Cloudflare Worker (see
-  `worker/`) instead of hitting GitHub directly. Creating an issue needs a
-  token, and a token can't safely be embedded in a public HTML page — the
-  Worker is the one place that holds it.
-
-## Setup
-
-1. **Deploy the write proxy** — follow `worker/README.md`. You'll end up
-   with a Worker URL.
-2. **Point the form at it** — in `index.html`, set `SUBMIT_ENDPOINT`
-   near the top of the `<script>` block to that Worker URL.
-3. **Host the page** — enable GitHub Pages on this repo (Settings → Pages →
-   Source: "Deploy from a branch" → pick this branch → `/ (root)` → Save).
-   GitHub gives you a URL like `https://galantoren.github.io/AI-Form/`.
-4. **Share the Pages URL** with the team. Submissions show up as Issues
-   labeled `signal`, and anyone who opens the page's `#control` route (the
-   "Mission Control" link in the top bar) sees the shared dashboard.
+- **The page** (`index.html`) is static HTML/CSS/JS, deployed to GitHub
+  Pages by `.github/workflows/pages.yml`.
+- **Writes** (a submitted response) go through a small Cloudflare Worker
+  (see `worker/`) instead of hitting GitHub directly. Creating an issue
+  needs a token, and a token can't safely be embedded in a public HTML
+  page — the Worker is the one place that holds it.
+- The Worker URL is set in `CONFIG.endpoint` near the top of the
+  `<script>` block in `index.html`. Leave it empty and the final button
+  falls back to copying the answers as text.
 
 ## Notes
 
-- No submissions exist until people fill out the form — Mission Control
-  starts empty.
-- If the Worker is unreachable when someone submits, their signal is kept
-  in that browser's `localStorage` and flagged "this device only" until it
-  can be resent — it won't silently vanish, but it also won't show up for
-  anyone else until resubmitted successfully.
-- See `worker/README.md` for the security tradeoffs of the write endpoint.
+- This repo is public, so every response (including names) is readable
+  by anyone who opens the repo's Issues.
+- In-progress answers are kept in the respondent's browser
+  (`localStorage`), so a failed send can simply be retried.
+- To read all responses: Issues → filter by label `survey`. Each issue's
+  JSON block is machine-readable if you want to export them.
+- See `worker/README.md` for deploying the Worker and the security
+  tradeoffs of the write endpoint.

@@ -1,15 +1,12 @@
 /**
- * Signal Relay write proxy.
+ * AI Pulse survey write proxy.
  *
- * index.html is a public, static page (served e.g. via GitHub Pages).
- * Reads of Mission Control hit the public GitHub REST API directly — no
- * secret needed for that, since the repo is public.
- *
- * Writes are different: creating an Issue requires a token, and a token
- * embedded in public client-side HTML would be visible to anyone who views
- * the page source. This Worker is the only thing that holds that token. The
- * page POSTs a submission here; this Worker validates it, computes the next
- * crew id, and creates the GitHub Issue server-side.
+ * index.html is a public, static page (served via GitHub Pages). Saving a
+ * response means creating a GitHub Issue, which requires a token, and a
+ * token embedded in public client-side HTML would be visible to anyone who
+ * views the page source. This Worker is the only thing that holds that
+ * token. The page POSTs a response here; this Worker validates it and
+ * creates the GitHub Issue (labeled `survey`) server-side.
  *
  * Required secret (set with `wrangler secret put GITHUB_TOKEN`):
  *   GITHUB_TOKEN - a fine-grained PAT scoped to ONLY this repo, with
@@ -25,10 +22,8 @@
  *                    inherently public write endpoint, like any web form).
  */
 
-const SIGNAL_LABEL = 'signal';
-const SITES = ['UK', 'US', 'TLV'];
-const TEAMS = ['Enterprise', 'SMB'];
-const PRIORITIES = ['Low', 'Medium', 'High', 'Mission-Critical'];
+const SURVEY_LABEL = 'survey';
+const MAX_BODY_BYTES = 50000;
 
 export default {
   async fetch(request, env) {
@@ -45,9 +40,15 @@ export default {
       return json({ error: 'method_not_allowed' }, 405, corsHeaders);
     }
 
+    // The page posts with Content-Type text/plain (avoids a CORS preflight),
+    // so read the raw text and parse it ourselves.
+    const raw = await request.text();
+    if (raw.length > MAX_BODY_BYTES) {
+      return json({ error: 'too_large' }, 413, corsHeaders);
+    }
     let data;
     try {
-      data = await request.json();
+      data = JSON.parse(raw);
     } catch (e) {
       return json({ error: 'invalid_json' }, 400, corsHeaders);
     }
@@ -57,60 +58,28 @@ export default {
       return json({ error: 'validation_failed', fields: errors }, 400, corsHeaders);
     }
 
-    const repo = env.GITHUB_REPO;
-    const ghHeaders = {
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'signal-relay-worker',
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
-
-    let seq;
-    try {
-      seq = await nextSequence(repo, ghHeaders);
-    } catch (e) {
-      return json({ error: 'github_unreachable' }, 502, corsHeaders);
-    }
-    const crewId = 'CSA-' + String(seq).padStart(3, '0');
-
-    const submission = {
-      id: typeof data.id === 'string' ? data.id.slice(0, 64) : undefined,
-      ts: Date.now(),
-      crewId,
-      crewSeq: seq,
-      name: String(data.name).trim().slice(0, 120),
-      site: data.site,
-      team: data.team,
-      headline: String(data.headline).trim().slice(0, 90),
-      details: String(data.details).trim().slice(0, 1600),
-      priority: data.priority,
-      wantsDemo: !!data.wantsDemo,
-      wantsSkillShare: !!data.wantsSkillShare,
-      skill: data.wantsSkillShare ? String(data.skill || '').trim().slice(0, 80) : '',
-    };
-
-    const title = `[${crewId}] ${submission.headline}`;
+    const response = normalize(data);
+    const title = `[AI Pulse] ${response.name}${response.region ? ` (${response.region})` : ''}`;
     const body = [
-      `**Name:** ${submission.name}`,
-      `**Site:** ${submission.site}`,
-      `**Team:** ${submission.team}`,
-      `**Priority:** ${submission.priority}`,
-      `**Wants to demo:** ${submission.wantsDemo ? 'Yes' : 'No'}`,
-      `**Skill to share:** ${submission.wantsSkillShare ? submission.skill || 'Yes' : 'No'}`,
+      renderMarkdown(response),
       '',
-      submission.details,
-      '',
-      '```json',
-      JSON.stringify(submission),
-      '```',
+      '~~~~json',
+      JSON.stringify(response, null, 2),
+      '~~~~',
     ].join('\n');
 
     let createResp;
     try {
-      createResp = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+      createResp = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/issues`, {
         method: 'POST',
-        headers: { ...ghHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, body, labels: [SIGNAL_LABEL] }),
+        headers: {
+          Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'ai-pulse-worker',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title, body, labels: [SURVEY_LABEL] }),
       });
     } catch (e) {
       return json({ error: 'github_unreachable' }, 502, corsHeaders);
@@ -121,7 +90,7 @@ export default {
     }
 
     const issue = await createResp.json();
-    return json({ ok: true, crewId, crewSeq: seq, issueNumber: issue.number }, 200, corsHeaders);
+    return json({ ok: true, issueNumber: issue.number }, 200, corsHeaders);
   },
 };
 
@@ -136,29 +105,91 @@ function validate(data) {
   const errors = [];
   if (!data || typeof data !== 'object') return ['body'];
   if (!data.name || typeof data.name !== 'string' || !data.name.trim()) errors.push('name');
-  if (!SITES.includes(data.site)) errors.push('site');
-  if (!TEAMS.includes(data.team)) errors.push('team');
-  if (!data.headline || typeof data.headline !== 'string' || !data.headline.trim()) errors.push('headline');
-  if (!data.details || typeof data.details !== 'string' || data.details.trim().length < 6) errors.push('details');
-  if (!PRIORITIES.includes(data.priority)) errors.push('priority');
-  if (data.wantsSkillShare && data.skill && typeof data.skill !== 'string') errors.push('skill');
+  if (!data.answers || typeof data.answers !== 'object') errors.push('answers');
   return errors;
 }
 
-// GitHub doesn't expose a plain "count of issues with this label" field, but
-// asking for 1 result per page and reading the `page=N` of the `rel="last"`
-// Link header gives the total page count, which equals the total count.
-async function nextSequence(repo, ghHeaders) {
-  const resp = await fetch(
-    `https://api.github.com/repos/${repo}/issues?labels=${encodeURIComponent(SIGNAL_LABEL)}&state=all&per_page=1`,
-    { headers: ghHeaders }
-  );
-  if (!resp.ok) throw new Error('count_failed');
-  const link = resp.headers.get('Link');
-  if (link) {
-    const match = link.match(/[?&]page=(\d+)>;\s*rel="last"/);
-    if (match) return parseInt(match[1], 10) + 1;
-  }
-  const items = await resp.json();
-  return items.length + 1;
+const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const strList = (v, max) => (Array.isArray(v) ? v.map((x) => str(x, 200)).filter(Boolean).slice(0, max) : []);
+
+// Rebuild the response from known fields only, so arbitrary extra keys a
+// direct caller might send never end up in the issue.
+function normalize(d) {
+  const a = d.answers || {};
+  const sinks = Array.isArray(a.timeSinks) ? a.timeSinks : [];
+  return {
+    survey: str(d.survey, 80) || 'CSM AI Survey',
+    submittedAt: new Date().toISOString(),
+    name: str(d.name, 120),
+    region: str(d.region, 40) || null,
+    luckyNumber: Number.isFinite(d.luckyNumber) ? d.luckyNumber : null,
+    drawnVia: str(d.drawnVia, 40),
+    minutes: Number.isFinite(d.minutes) ? d.minutes : null,
+    answers: {
+      dayToDayResult: str(a.dayToDayResult, 12000),
+      portfolio: str(a.portfolio, 500),
+      timeSinks: sinks
+        .slice(0, 10)
+        .map((t) => ({ task: str(t && t.task, 300), hrsPerWeek: str(String((t && t.hrsPerWeek) ?? ''), 10) }))
+        .filter((t) => t.task),
+      timeSinkCategories: strList(a.timeSinkCategories, 20),
+      proactiveWork: {
+        ideas: strList(a.proactiveWork && a.proactiveWork.ideas, 20),
+        text: str(a.proactiveWork && a.proactiveWork.text, 3000),
+      },
+      automation: {
+        ideas: strList(a.automation && a.automation.ideas, 20),
+        text: str(a.automation && a.automation.text, 3000),
+      },
+      barriers: {
+        usesClaudeActively: !!(a.barriers && a.barriers.usesClaudeActively),
+        options: strList(a.barriers && a.barriers.options, 20),
+        other: str(a.barriers && a.barriers.other, 1000),
+      },
+      knowledgeGaps: {
+        topics: strList(a.knowledgeGaps && a.knowledgeGaps.topics, 20),
+        other: str(a.knowledgeGaps && a.knowledgeGaps.other, 1000),
+      },
+      anythingElse: str(a.anythingElse, 3000),
+    },
+  };
+}
+
+function renderMarkdown(r) {
+  const a = r.answers;
+  const or = (s) => s || '_(no answer)_';
+  const joinParts = (...parts) => parts.filter(Boolean).join('\n\n');
+  const L = [
+    `**Name:** ${r.name}`,
+    `**Region:** ${r.region || '—'}`,
+    `**Portfolio:** ${a.portfolio || '—'}`,
+    `**Minutes:** ${r.minutes ?? '—'}`,
+    '',
+    '### 1. Day-to-day (Claude result)',
+    or(a.dayToDayResult),
+    '',
+    '### 2. Biggest time sinks',
+    a.timeSinks.length
+      ? a.timeSinks.map((t, i) => `${i + 1}. ${t.task}${t.hrsPerWeek ? ` (~${t.hrsPerWeek} h/wk)` : ''}`).join('\n')
+      : '_(no answer)_',
+    a.timeSinkCategories.length ? `\nCategories: ${a.timeSinkCategories.join(', ')}` : '',
+    '',
+    '### 3. Proactive work',
+    or(joinParts(a.proactiveWork.ideas.join(', '), a.proactiveWork.text)),
+    '',
+    '### 4. Automation opportunities',
+    or(joinParts(a.automation.ideas.join(', '), a.automation.text)),
+    '',
+    '### 5. Barriers to using Claude',
+    a.barriers.usesClaudeActively
+      ? 'Uses Claude actively (skipped)'
+      : or(joinParts(a.barriers.options.filter((o) => o !== 'Other').join(', '), a.barriers.other && `Other: ${a.barriers.other}`)),
+    '',
+    '### 6. Knowledge gaps',
+    or(joinParts(a.knowledgeGaps.topics.join(', '), a.knowledgeGaps.other)),
+    '',
+    '### 7. Anything else',
+    or(a.anythingElse),
+  ];
+  return L.join('\n');
 }
