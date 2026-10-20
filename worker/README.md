@@ -49,24 +49,38 @@ Optionally also set `ALLOWED_ORIGIN` in `wrangler.toml` to your GitHub
 Pages origin (e.g. `https://galantoren.github.io`) and redeploy, so the
 browser's CORS header is scoped to your page instead of `*`.
 
-## 4. (Optional) Post each response to Slack
+## 4. (Optional) Email each response to a list
 
-1. Go to https://api.slack.com/apps → **Create New App** → From scratch,
-   pick your workspace.
-2. **Incoming Webhooks** → turn it on → **Add New Webhook to Workspace** →
-   pick the channel → Allow. Copy the webhook URL.
-3. Store it as a secret (it lets anyone post to that channel, so never put
-   it in `index.html` or `wrangler.toml`):
+Cloudflare can't email arbitrary addresses by itself, so emails go out
+through a tiny Google Apps Script (`email-relay.gs`) that sends from your
+Google account.
+
+1. Go to https://script.google.com → **New project**. Replace the code with
+   the contents of `worker/email-relay.gs`.
+2. In the Apps Script editor (not in this repo — it's public), set
+   `RECIPIENTS` to your email list and `SHARED_KEY` to a long random
+   string.
+3. **Deploy → New deployment** → type **Web app** → Execute as **Me**,
+   Who has access **Anyone** → Deploy. Approve the permission prompt
+   (Google will warn the app is unverified; it's your own script, so
+   choose Advanced → continue). Copy the web app URL.
+4. Store the URL plus your key as a Worker secret, then redeploy:
 
    ```bash
    cd worker
-   npx wrangler secret put SLACK_WEBHOOK_URL   # paste the webhook URL
+   npx wrangler secret put EMAIL_WEBHOOK_URL
+   # paste: https://script.google.com/macros/s/<id>/exec?key=<your SHARED_KEY>
+   npx wrangler deploy
    ```
 
-Each new response then posts the person's name, region, top time sinks,
-automation ideas and knowledge gaps, with a link to the full answers. If
-Slack is down the response is still saved. To stop the posts, run
-`npx wrangler secret delete SLACK_WEBHOOK_URL`.
+Each new response then emails the full answers plus a link to its issue.
+If the email fails, the response is still saved. To change who gets it,
+edit `RECIPIENTS` in Apps Script and deploy a new version (Deploy → Manage
+deployments → edit → New version) — the URL stays the same. To stop the
+emails, run `npx wrangler secret delete EMAIL_WEBHOOK_URL`.
+
+Gmail allows about 100 recipients per day on a personal account (1,500
+on Google Workspace); each response counts once per recipient.
 
 ## Know the tradeoff
 

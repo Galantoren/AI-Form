@@ -12,10 +12,12 @@
  *   GITHUB_TOKEN - a fine-grained PAT scoped to ONLY this repo, with
  *                  "Issues: Read and write" permission and nothing else.
  *
- * Optional secret (set with `wrangler secret put SLACK_WEBHOOK_URL`):
- *   SLACK_WEBHOOK_URL - a Slack Incoming Webhook for the channel that should
- *                       be pinged on each new response. If unset, or if the
- *                       Slack post fails, the response is still saved.
+ * Optional secret (set with `wrangler secret put EMAIL_WEBHOOK_URL`):
+ *   EMAIL_WEBHOOK_URL - the deployed URL of worker/email-relay.gs (a Google
+ *                       Apps Script web app), including its ?key=... param.
+ *                       The script holds the recipient list and sends an
+ *                       email per new response. If unset, or if the email
+ *                       fails, the response is still saved.
  *
  * Required vars (wrangler.toml [vars]):
  *   GITHUB_REPO    - "owner/repo", e.g. "Galantoren/AI-Form"
@@ -96,11 +98,11 @@ export default {
 
     const issue = await createResp.json();
 
-    if (env.SLACK_WEBHOOK_URL) {
+    if (env.EMAIL_WEBHOOK_URL) {
       try {
-        await notifySlack(env.SLACK_WEBHOOK_URL, response, issue.html_url);
+        await notifyEmail(env.EMAIL_WEBHOOK_URL, response, issue.html_url);
       } catch (e) {
-        // The response is already saved as an issue; a Slack hiccup shouldn't fail the submit.
+        // The response is already saved as an issue; an email hiccup shouldn't fail the submit.
       }
     }
 
@@ -208,29 +210,18 @@ function renderMarkdown(r) {
   return L.join('\n');
 }
 
-// Slack mrkdwn treats &, < and > as control characters.
-const slackEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-async function notifySlack(webhookUrl, r, issueUrl) {
-  const a = r.answers;
-  const lines = [
-    `*New AI Pulse response from ${slackEscape(r.name)}*${r.region ? ` (${slackEscape(r.region)})` : ''}`,
-  ];
-  if (a.timeSinks.length) {
-    lines.push(`*Top time sinks:* ${slackEscape(a.timeSinks.slice(0, 3).map((t) => t.task).join('; '))}`);
-  }
-  if (a.automation.ideas.length) {
-    lines.push(`*Automation ideas:* ${slackEscape(a.automation.ideas.join(', '))}`);
-  }
-  if (a.knowledgeGaps.topics.length) {
-    lines.push(`*Knowledge gaps:* ${slackEscape(a.knowledgeGaps.topics.join(', '))}`);
-  }
-  lines.push(`<${issueUrl}|View full answers>`);
-
+async function notifyEmail(webhookUrl, r, issueUrl) {
+  const subject = `New AI Pulse response: ${r.name}${r.region ? ` (${r.region})` : ''}`;
+  // Same summary as the issue, minus the markdown syntax, which email shows literally.
+  const plain = renderMarkdown(r)
+    .replace(/^### /gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/_\(no answer\)_/g, '(no answer)');
+  const text = [plain, '', `Full response: ${issueUrl}`].join('\n');
   const resp = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: lines.join('\n') }),
+    body: JSON.stringify({ subject, text }),
   });
-  if (!resp.ok) throw new Error(`slack_${resp.status}`);
+  if (!resp.ok) throw new Error(`email_${resp.status}`);
 }
