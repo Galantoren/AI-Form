@@ -49,6 +49,25 @@ Optionally also set `ALLOWED_ORIGIN` in `wrangler.toml` to your GitHub
 Pages origin (e.g. `https://galantoren.github.io`) and redeploy, so the
 browser's CORS header is scoped to your page instead of `*`.
 
+## 4. (Optional) Post each response to Slack
+
+1. Go to https://api.slack.com/apps → **Create New App** → From scratch,
+   pick your workspace.
+2. **Incoming Webhooks** → turn it on → **Add New Webhook to Workspace** →
+   pick the channel → Allow. Copy the webhook URL.
+3. Store it as a secret (it lets anyone post to that channel, so never put
+   it in `index.html` or `wrangler.toml`):
+
+   ```bash
+   cd worker
+   npx wrangler secret put SLACK_WEBHOOK_URL   # paste the webhook URL
+   ```
+
+Each new response then posts the person's name, region, top time sinks,
+automation ideas and knowledge gaps, with a link to the full answers. If
+Slack is down the response is still saved. To stop the posts, run
+`npx wrangler secret delete SLACK_WEBHOOK_URL`.
+
 ## Know the tradeoff
 
 This endpoint has no auth of its own — anyone who has (or guesses) the
