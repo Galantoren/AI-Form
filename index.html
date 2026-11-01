@@ -292,6 +292,11 @@ kbd{font-family:var(--font);font-size:11px;padding:2px 7px;border-radius:6px;bor
 .stat span{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--lav)}
 .rbtns{display:flex;flex-direction:column;gap:10px}
 .rnote{font-size:12.5px;color:var(--lav);line-height:1.5;margin-top:4px}
+.sendstat{width:100%;box-sizing:border-box;margin:0 0 14px;padding:16px 18px;border-radius:14px;font-size:17px;line-height:1.4;font-weight:600;text-align:left;border:2px solid transparent}
+.sendstat small{display:block;margin-top:4px;font-size:14px;font-weight:400;opacity:.95}
+.sendstat.pending{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.28);color:#fff}
+.sendstat.ok{background:#8fe3b0;border-color:#5fcf8c;color:#10331f;font-size:20px}
+.sendstat.err{background:#ffb4b4;border-color:#ff6b6b;color:#4a0d0d;font-size:20px}
 .snap{padding:30px}
 .snap h3{margin:0 0 4px;font-size:22px;font-weight:500;letter-spacing:-.02em}
 .snap>p{margin:0 0 20px;color:var(--lav);font-size:13.5px}
@@ -829,6 +834,7 @@ function finish(){
       <div class="rsub">${subline}</div>
       <div class="stats"><div class="stat"><b>${n}</b><span>Answered</span></div><div class="stat"><b>${p.minutes}</b><span>Minutes</span></div><div class="stat"><b>${S.lens}</b><span>Lucky no.</span></div></div>
       <div class="rbtns">
+        ${CONFIG.endpoint?'<div class="sendstat pending" id="sendStat" role="status" aria-live="polite">Not sent yet<small>Press \u201cSend my answers\u201d below so the team receives them.</small></div>':''}
         <button class="btn primary" id="sendBtn"><span>${CONFIG.endpoint?'Send my answers':'Copy my answers'}</span></button>
         <button class="btn" id="jsonBtn"><span>Download answers (JSON)</span></button>
         <button class="btn" id="againBtn"><span>Start over</span></button>
@@ -863,9 +869,11 @@ function finish(){
   $('#sendBtn').onclick = function(){
     if(!CONFIG.endpoint){ copyText(asText(), this, 'Answers copied'); return; }
     const sp=this.querySelector('span'); sp.textContent='Sending...'; this.disabled=true;
+    const st=$('#sendStat'), setSt=(c,h,m)=>{ st.className='sendstat '+c; st.innerHTML=h+'<small>'+m+'</small>'; st.scrollIntoView({block:'nearest',behavior:'smooth'}); };
+    setSt('pending','Sending\u2026','Please keep this page open.');
     fetch(CONFIG.endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload())})
-      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); })
-      .catch(()=>{ this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); });
+      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); setSt('ok','\u2713 Sent! Your answers were received.','Thank you. You can close this page.'); })
+      .catch(e=>{ this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); setSt('err','\u2717 NOT sent. Your answers did not reach us.','Please press \u201cTry again\u201d. If it keeps failing, use \u201cDownload answers (JSON)\u201d and send the file to the survey team. ('+esc(String(e&&e.message||e))+')'); });
   };
 }
 </script>
