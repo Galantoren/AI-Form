@@ -11,3 +11,7 @@ ALLOWED_ORIGIN = "https://galantoren.github.io"
 
 # GITHUB_TOKEN is a secret, not a var — never put it here.
 # Set it with: wrangler secret put GITHUB_TOKEN
+
+# Keep request logs (Workers Logs) so failed submissions can be diagnosed.
+[observability]
+enabled = true

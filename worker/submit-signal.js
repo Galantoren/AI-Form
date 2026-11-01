@@ -51,17 +51,20 @@ export default {
     // so read the raw text and parse it ourselves.
     const raw = await request.text();
     if (raw.length > MAX_BODY_BYTES) {
+      console.error('submit_failed: too_large', raw.length);
       return json({ error: 'too_large' }, 413, corsHeaders);
     }
     let data;
     try {
       data = JSON.parse(raw);
     } catch (e) {
+      console.error('submit_failed: invalid_json');
       return json({ error: 'invalid_json' }, 400, corsHeaders);
     }
 
     const errors = validate(data);
     if (errors.length) {
+      console.error('submit_failed: validation_failed', errors.join(','));
       return json({ error: 'validation_failed', fields: errors }, 400, corsHeaders);
     }
 
@@ -89,10 +92,12 @@ export default {
         body: JSON.stringify({ title, body, labels: [SURVEY_LABEL] }),
       });
     } catch (e) {
+      console.error('submit_failed: github_unreachable', String(e));
       return json({ error: 'github_unreachable' }, 502, corsHeaders);
     }
 
     if (!createResp.ok) {
+      console.error('submit_failed: github_error', createResp.status, response.name, (await createResp.text()).slice(0, 300));
       return json({ error: 'github_error', status: createResp.status }, 502, corsHeaders);
     }
 
@@ -102,10 +107,12 @@ export default {
       try {
         await notifyEmail(env.EMAIL_WEBHOOK_URL, response, issue.html_url);
       } catch (e) {
+        console.error('email_failed', String(e));
         // The response is already saved as an issue; an email hiccup shouldn't fail the submit.
       }
     }
 
+    console.log('submit_ok', issue.number, response.name);
     return json({ ok: true, issueNumber: issue.number }, 200, corsHeaders);
   },
 };
