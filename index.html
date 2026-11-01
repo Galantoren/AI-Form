@@ -900,10 +900,21 @@ function finish(){
     hb('send_click');
     setSt('pending','Sending\u2026','Please keep this page open.');
     fetch(CONFIG.endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload())})
-      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); S.sent=true; hb('send_ok'); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); setSt('ok','\u2713 Sent! Your answers were received.','Thank you. You can close this page.'); })
+      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); S.sent=true; save(); hb('send_ok'); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); setSt('ok','\u2713 Sent! Your answers were received.','Thank you. You can close this page.'); })
       .catch(e=>{ hb('send_fail'); this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); setSt('err','\u2717 NOT sent. Your answers did not reach us.','Please press \u201cTry again\u201d. If it keeps failing, use \u201cDownload answers (JSON)\u201d and send the file to the survey team. ('+esc(String(e&&e.message||e))+')'); });
   };
 }
+
+/* ---------- restore an unfinished session on reload ---------- */
+(function restoreOnLoad(){
+  const dr = loadDraft();
+  if(!dr || dr.sent) return;                       // nothing saved, or already submitted
+  S = dr; S.t0 = S.t0 || Date.now();
+  if(!S.done) hb('resume');
+  if(S.done){ finish(); toast('Welcome back, '+S.name+'. Your answers are not sent yet.'); }
+  else if(S.lens){ startSurvey(true); toast('Welcome back, '+S.name+'. Your draft was restored.'); }
+  else startDraw(S.name, true);
+})();
 </script>
 </body>
 </html>
