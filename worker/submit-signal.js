@@ -47,6 +47,11 @@ export default {
       return json({ error: 'method_not_allowed' }, 405, corsHeaders);
     }
 
+    // Progress heartbeats: logged only, never written to GitHub.
+    if (new URL(request.url).pathname.endsWith('/heartbeat')) {
+      return handleHeartbeat(request, corsHeaders);
+    }
+
     // The page posts with Content-Type text/plain (avoids a CORS preflight),
     // so read the raw text and parse it ourselves.
     const raw = await request.text();
@@ -116,6 +121,36 @@ export default {
     return json({ ok: true, issueNumber: issue.number }, 200, corsHeaders);
   },
 };
+
+const HEARTBEAT_EVENTS = new Set(['start', 'resume', 'question', 'finish', 'send_click', 'send_ok', 'send_fail', 'hidden']);
+
+// Records that someone is partway through the form, so a missing issue can be
+// told apart from "never got past question N". Deliberately carries no answers.
+async function handleHeartbeat(request, corsHeaders) {
+  const raw = await request.text();
+  if (raw.length > 2000) return new Response(null, { status: 204, headers: corsHeaders });
+  let d;
+  try {
+    d = JSON.parse(raw);
+  } catch (e) {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+  if (!d || typeof d !== 'object' || !HEARTBEAT_EVENTS.has(d.ev)) {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+  const num = (v) => (Number.isFinite(v) ? v : null);
+  console.log('heartbeat', JSON.stringify({
+    ev: d.ev,
+    sid: str(d.sid, 40),
+    name: str(d.name, 120),
+    region: str(d.region, 40) || null,
+    q: num(d.q),
+    max: num(d.max),
+    total: num(d.total),
+    at: new Date().toISOString(),
+  }));
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
 
 function json(obj, status, headers) {
   return new Response(JSON.stringify(obj), {
