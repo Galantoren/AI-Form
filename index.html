@@ -375,6 +375,7 @@ kbd{font-family:var(--font);font-size:11px;padding:2px 7px;border-radius:6px;bor
               <label for="name">Your name</label>
             </div>
             <button class="btn primary" type="button" id="startBtn">Start <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+            <p class="rnote" style="margin-top:10px">We note your name, region and how far you got so the team can follow up if you don’t finish. Your answers are only sent when you press “Send my answers”.</p>
           </div>
           <div class="region" data-a>
             <div class="cap">Your region (optional)</div>
@@ -519,6 +520,17 @@ const blankAnswers = () => ({portfolio:'', copied:false, q1:'', q2:{items:['',''
 let S = null;     // {name, region, lens, via, idx, max, t0, A}
 let REGION = '';
 function save(){ if(S) store.set(KEY, JSON.stringify(S)); }
+// Progress heartbeat: tells the survey team who is partway through (name, region, question
+// number only, never answers). Fire-and-forget; failures never affect the form.
+function hb(ev){
+  if(!CONFIG.endpoint || !S) return;
+  try{
+    if(!S.sid){ S.sid = Math.random().toString(36).slice(2,10)+Date.now().toString(36); save(); }
+    fetch(CONFIG.endpoint.replace(/\/[^\/]*$/,'/heartbeat'), {method:'POST', headers:{'Content-Type':'text/plain'}, keepalive:true,
+      body:JSON.stringify({sid:S.sid, ev, name:S.name, region:S.region||null, q:S.idx, max:S.max, total:TOTAL})}).catch(()=>{});
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', () => { if(document.visibilityState==='hidden' && S && !S.sent) hb('hidden'); });
 // Forced save on Next/Back/Skip: write, read it back to verify, and flash a small indicator.
 let _dsT;
 function saveDraftNow(){
@@ -583,14 +595,14 @@ function renderResume(){
   if(!dr || dr.done){ box.hidden = true; box.innerHTML=''; return; }
   box.hidden = false;
   box.innerHTML = `<button class="btn sm" id="resumeBtn" type="button">Resume as ${esc(dr.name)}</button> <button class="link" id="dropDraft" type="button">Discard draft</button>`;
-  $('#resumeBtn').onclick = () => { S = dr; S.t0 = S.t0 || Date.now(); if(S.lens){ startSurvey(true); } else { startDraw(S.name, true); } };
+  $('#resumeBtn').onclick = () => { S = dr; S.t0 = S.t0 || Date.now(); hb('resume'); if(S.lens){ startSurvey(true); } else { startDraw(S.name, true); } };
   $('#dropDraft').onclick = () => { store.del(KEY); S=null; renderResume(); };
 }
 function startFlow(){
   const v = $('#name').value.trim(), f = $('#nameField');
   if(v.length<2){ f.classList.remove('bad'); void f.offsetWidth; f.classList.add('bad'); $('#name').focus(); return; }
   S = {name:v, region:REGION, lens:0, via:'', idx:0, max:0, t0:Date.now(), A:blankAnswers()};
-  save(); startDraw(v);
+  save(); hb('start'); startDraw(v);
 }
 $('#startBtn').addEventListener('click', startFlow);
 $('#name').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); startFlow(); } });
@@ -683,7 +695,7 @@ function startSurvey(resumed){
   $('#whoName').textContent = S.name; $('#avatar').textContent = S.name[0].toUpperCase();
   $('#segs').innerHTML = QS.map((_,i)=>'<button class="seg'+(i===0?' claude':'')+'" aria-label="'+(i===0?'Go to the Claude step':'Go to question '+i)+'"></button>').join('');
   $$('#segs .seg').forEach((s,i)=> s.onclick = () => goTo(i));
-  show('quiz'); renderQ(false);
+  show('quiz'); renderQ(false); hb('question');
 }
 function updateChrome(){
   $$('#segs .seg').forEach((s,i)=>{ s.classList.toggle('done', i!==S.idx && isAns(i)); s.classList.toggle('cur', i===S.idx); s.classList.toggle('can', i!==S.idx && (i<=S.max || isAns(i))); });
@@ -801,7 +813,7 @@ function bindQ(){
 function withPortfolio(t){ const p = (S.A.portfolio||'').trim() || '[region/countries, verticals, number of clients]'; return t.split('[PORTFOLIO]').join(p); }
 function goTo(n){
   if(n<0 || n>=TOTAL || n===S.idx) return;
-  const dir = n>S.idx ? 1 : -1; S.idx=n; S.max=Math.max(S.max,n); saveDraftNow(); renderQ(true, dir);
+  const dir = n>S.idx ? 1 : -1; S.idx=n; S.max=Math.max(S.max,n); saveDraftNow(); hb('question'); renderQ(true, dir);
 }
 document.addEventListener('keydown', e => {
   if(current!=='quiz' || !S || $('#modal').classList.contains('open')) return;
@@ -831,7 +843,7 @@ function asText(){
   return L.join('\n');
 }
 function finish(){
-  S.done = true; save();
+  S.done = true; save(); hb('finish');
   const n = answeredCount(), pct = n/QN, C = 2*Math.PI*104, A=S.A, p=payload();
   const title = n>=7 ? 'Pathfinder' : n>=5 ? 'Navigator' : 'Scout';
   const subline = n>=7 ? 'Every question answered. That is exactly the signal we need.' : n>=5 ? 'A strong picture. Every extra answer sharpens it.' : 'A good start. Come back to fill in more any time before the survey closes.';
@@ -885,10 +897,11 @@ function finish(){
     if(!CONFIG.endpoint){ copyText(asText(), this, 'Answers copied'); return; }
     const sp=this.querySelector('span'); sp.textContent='Sending...'; this.disabled=true;
     const st=$('#sendStat'), setSt=(c,h,m)=>{ st.className='sendstat '+c; st.innerHTML=h+'<small>'+m+'</small>'; st.scrollIntoView({block:'nearest',behavior:'smooth'}); };
+    hb('send_click');
     setSt('pending','Sending\u2026','Please keep this page open.');
     fetch(CONFIG.endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload())})
-      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); setSt('ok','\u2713 Sent! Your answers were received.','Thank you. You can close this page.'); })
-      .catch(e=>{ this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); setSt('err','\u2717 NOT sent. Your answers did not reach us.','Please press \u201cTry again\u201d. If it keeps failing, use \u201cDownload answers (JSON)\u201d and send the file to the survey team. ('+esc(String(e&&e.message||e))+')'); });
+      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); S.sent=true; hb('send_ok'); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); setSt('ok','\u2713 Sent! Your answers were received.','Thank you. You can close this page.'); })
+      .catch(e=>{ hb('send_fail'); this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); setSt('err','\u2717 NOT sent. Your answers did not reach us.','Please press \u201cTry again\u201d. If it keeps failing, use \u201cDownload answers (JSON)\u201d and send the file to the survey team. ('+esc(String(e&&e.message||e))+')'); });
   };
 }
 </script>

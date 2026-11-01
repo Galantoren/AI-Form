@@ -92,3 +92,16 @@ pages* are allowed to call it via `fetch`; it does not stop a direct
 but don't reuse this pattern for anything more sensitive without adding
 real request auth (e.g. a per-viewer secret, or Cloudflare Access in front
 of the Worker).
+
+## Progress heartbeats (find people who started but never submitted)
+
+The page also POSTs small events to `<worker>/heartbeat` (the same URL as
+`/submit` with the last segment swapped). The Worker only logs them (`console.log`,
+never GitHub). Each carries a random session id, the person's name, region and
+question number, never their answers. Events: `start`, `resume`, `question`,
+`finish`, `send_click`, `send_ok`, `send_fail`, `hidden` (tab closed or hidden).
+
+To see who is stuck: Cloudflare dashboard, Workers & Pages,
+`signal-relay-submit`, Observability, search for `heartbeat`, then group by `sid`.
+A `sid` with no `send_ok` never completed. Compare with `submit_ok` /
+`submit_failed` lines to see whether a send was attempted and why it failed.
