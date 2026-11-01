@@ -291,7 +291,15 @@ kbd{font-family:var(--font);font-size:11px;padding:2px 7px;border-radius:6px;bor
 .stat b{display:block;font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
 .stat span{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--lav)}
 .rbtns{display:flex;flex-direction:column;gap:10px}
+.draftstat{position:fixed;left:16px;bottom:16px;z-index:39;padding:7px 12px;border-radius:999px;background:rgba(20,18,50,.88);color:#cfe9d6;font-size:12.5px;font-weight:500;opacity:0;transform:translateY(6px);transition:opacity .25s,transform .25s;pointer-events:none}
+.draftstat.show{opacity:1;transform:none}
+.draftstat.bad{background:#ffb4b4;color:#4a0d0d}
 .rnote{font-size:12.5px;color:var(--lav);line-height:1.5;margin-top:4px}
+.sendstat{width:100%;box-sizing:border-box;margin:0 0 14px;padding:16px 18px;border-radius:14px;font-size:17px;line-height:1.4;font-weight:600;text-align:left;border:2px solid transparent}
+.sendstat small{display:block;margin-top:4px;font-size:14px;font-weight:400;opacity:.95}
+.sendstat.pending{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.28);color:#fff}
+.sendstat.ok{background:#8fe3b0;border-color:#5fcf8c;color:#10331f;font-size:20px}
+.sendstat.err{background:#ffb4b4;border-color:#ff6b6b;color:#4a0d0d;font-size:20px}
 .snap{padding:30px}
 .snap h3{margin:0 0 4px;font-size:22px;font-weight:500;letter-spacing:-.02em}
 .snap>p{margin:0 0 20px;color:var(--lav);font-size:13.5px}
@@ -424,6 +432,7 @@ kbd{font-family:var(--font);font-size:11px;padding:2px 7px;border-radius:6px;bor
 
 <div class="modal" id="modal" role="dialog" aria-modal="true"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast" role="status"></div>
+<div class="draftstat" id="draftStat" role="status" aria-live="polite"></div>
 
 <script>
 /* =====================================================================
@@ -510,6 +519,17 @@ const blankAnswers = () => ({portfolio:'', copied:false, q1:'', q2:{items:['',''
 let S = null;     // {name, region, lens, via, idx, max, t0, A}
 let REGION = '';
 function save(){ if(S) store.set(KEY, JSON.stringify(S)); }
+// Forced save on Next/Back/Skip: write, read it back to verify, and flash a small indicator.
+let _dsT;
+function saveDraftNow(){
+  if(!S) return;
+  save();
+  let ok=false; try{ ok = !!(localStorage.getItem(KEY)); }catch(e){}
+  const el=$('#draftStat'); if(!el) return;
+  el.textContent = ok ? '\u2713 Draft saved' : 'Draft not saved (browser blocks storage). Keep this tab open.';
+  el.className = 'draftstat show' + (ok ? '' : ' bad');
+  clearTimeout(_dsT); _dsT=setTimeout(()=>el.classList.remove('show'), ok?1600:6000);
+}
 function loadDraft(){ try{ const o = JSON.parse(store.get(KEY)||'null'); return o && o.name && o.A ? o : null; }catch(e){ return null; } }
 
 function enter(root, base=0){
@@ -772,16 +792,16 @@ function bindQ(){
     if(v==='Other' && k===-1) $('#f-q5o').focus();
     touch();
   }));
-  const sk = $('#skip5'); if(sk) sk.onclick = () => { A.q5.skip=!A.q5.skip; if(A.q5.skip){ A.q5.opts=[]; A.q5.other=''; } renderQ(false); save(); if(A.q5.skip) toast('Marked: you use Claude actively'); };
+  const sk = $('#skip5'); if(sk) sk.onclick = () => { A.q5.skip=!A.q5.skip; if(A.q5.skip){ A.q5.opts=[]; A.q5.other=''; } renderQ(false); saveDraftNow(); if(A.q5.skip) toast('Marked: you use Claude actively'); };
   const cs=$('#copyShort'); if(cs) cs.onclick = () => (A.copied=true, save(), updateChrome(), copyText(withPortfolio(SHORT), cs, 'Copied. Paste it into Claude.'));
   const cf=$('#copyFull'); if(cf) cf.onclick = () => (A.copied=true, save(), updateChrome(), copyText(withPortfolio(FULL), cf, 'Detailed prompt copied. Paste it into Claude.'));
-  $('#backBtn').onclick = () => goTo(S.idx-1);
-  $('#nextBtn').onclick = () => { if(S.idx===TOTAL-1) finish(); else goTo(S.idx+1); };
+  $('#backBtn').onclick = () => { saveDraftNow(); goTo(S.idx-1); };
+  $('#nextBtn').onclick = () => { saveDraftNow(); if(S.idx===TOTAL-1) finish(); else goTo(S.idx+1); };
 }
 function withPortfolio(t){ const p = (S.A.portfolio||'').trim() || '[region/countries, verticals, number of clients]'; return t.split('[PORTFOLIO]').join(p); }
 function goTo(n){
   if(n<0 || n>=TOTAL || n===S.idx) return;
-  const dir = n>S.idx ? 1 : -1; S.idx=n; S.max=Math.max(S.max,n); save(); renderQ(true, dir);
+  const dir = n>S.idx ? 1 : -1; S.idx=n; S.max=Math.max(S.max,n); saveDraftNow(); renderQ(true, dir);
 }
 document.addEventListener('keydown', e => {
   if(current!=='quiz' || !S || $('#modal').classList.contains('open')) return;
@@ -829,6 +849,7 @@ function finish(){
       <div class="rsub">${subline}</div>
       <div class="stats"><div class="stat"><b>${n}</b><span>Answered</span></div><div class="stat"><b>${p.minutes}</b><span>Minutes</span></div><div class="stat"><b>${S.lens}</b><span>Lucky no.</span></div></div>
       <div class="rbtns">
+        ${CONFIG.endpoint?'<div class="sendstat pending" id="sendStat" role="status" aria-live="polite">Not sent yet<small>Press \u201cSend my answers\u201d below so the team receives them.</small></div>':''}
         <button class="btn primary" id="sendBtn"><span>${CONFIG.endpoint?'Send my answers':'Copy my answers'}</span></button>
         <button class="btn" id="jsonBtn"><span>Download answers (JSON)</span></button>
         <button class="btn" id="againBtn"><span>Start over</span></button>
@@ -863,9 +884,11 @@ function finish(){
   $('#sendBtn').onclick = function(){
     if(!CONFIG.endpoint){ copyText(asText(), this, 'Answers copied'); return; }
     const sp=this.querySelector('span'); sp.textContent='Sending...'; this.disabled=true;
+    const st=$('#sendStat'), setSt=(c,h,m)=>{ st.className='sendstat '+c; st.innerHTML=h+'<small>'+m+'</small>'; st.scrollIntoView({block:'nearest',behavior:'smooth'}); };
+    setSt('pending','Sending\u2026','Please keep this page open.');
     fetch(CONFIG.endpoint,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload())})
-      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); })
-      .catch(()=>{ this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); });
+      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); sp.textContent='Sent. Thank you'; this.classList.add('done'); toast('Answers sent'); setSt('ok','\u2713 Sent! Your answers were received.','Thank you. You can close this page.'); })
+      .catch(e=>{ this.disabled=false; sp.textContent='Try again'; toast('Could not send. Try again or copy instead.'); setSt('err','\u2717 NOT sent. Your answers did not reach us.','Please press \u201cTry again\u201d. If it keeps failing, use \u201cDownload answers (JSON)\u201d and send the file to the survey team. ('+esc(String(e&&e.message||e))+')'); });
   };
 }
 </script>
